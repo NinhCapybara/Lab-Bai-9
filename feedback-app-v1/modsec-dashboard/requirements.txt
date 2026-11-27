@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+jinja2
+sqlalchemy
+aiofiles
+weasyprint
+python-multipart
+matplotlib
+docker

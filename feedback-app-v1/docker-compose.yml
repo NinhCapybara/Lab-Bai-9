@@ -1,10 +1,9 @@
-
 services:
   gateway:
     image: haproxy:3.2-alpine
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "${WEB_PORT:-8080}:8080"
     volumes:
       - ./gateway/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     depends_on:
@@ -15,15 +14,27 @@ services:
 
   waf-modsecurity:
     image: owasp/modsecurity-crs:4.25.1-nginx-lts
+    container_name: waf-modsecurity
     restart: unless-stopped
     environment:
       BACKEND: "http://web:80"
       PORT: "8080"
-      MODSEC_RULE_ENGINE: "${MODSEC_RULE_ENGINE:-On}"
+      MODSEC_RULE_ENGINE: "${MODSEC_RULE_ENGINE:-DetectionOnly}"
       MODSEC_AUDIT_ENGINE: "RelevantOnly"
+      MODSEC_AUDIT_LOG: "/var/log/modsecurity/audit/audit.log"
+      MODSEC_AUDIT_LOG_FORMAT: "Native"
+      MODSEC_AUDIT_LOG_PARTS: "ABFHZ"
+      MODSEC_AUDIT_LOG_TYPE: "Serial"
       PARANOIA: "1"
       BLOCKING_PARANOIA: "1"
       ANOMALY_INBOUND: "5"
+      ANOMALY_OUTBOUND: "4"
+    volumes:
+      - ./modsecurity/nginx/proxy_backend.conf.template:/etc/nginx/templates/includes/proxy_backend.conf.template:ro
+      - waf_rules:/opt/owasp-crs/rules
+      - ./modsecurity/rules/cve-2019-11043-detection.conf:/opt/owasp-crs/rules/zz-cve-2019-11043-detection.conf:ro
+      - ./modsecurity/rules/monitor-traffic.conf:/opt/owasp-crs/rules/zz-monitor-traffic.conf:ro
+      - waf_logs:/var/log/modsecurity/audit
     depends_on:
       - web
     networks:
@@ -76,13 +87,38 @@ services:
     networks:
       - application_network
 
+  modsec-dashboard:
+    build:
+      context: ./modsec-dashboard
+      dockerfile: Dockerfile
+    container_name: modsec-dashboard
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_FILE_PATH=/var/log/modsecurity/audit/audit.log
+      - RULE_DIR=/opt/owasp-crs/rules
+      - RULE_FILES_GLOB=/opt/owasp-crs/rules/*.conf
+      - RULE_STATE_FILE=/var/lib/modsecurity/rule_states.json
+      - WAF_CONTAINER_NAME=waf-modsecurity
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - waf_rules:/opt/owasp-crs/rules
+      - waf_state:/var/lib/modsecurity
+      - waf_logs:/var/log/modsecurity/audit
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - waf-modsecurity
+    networks:
+      - application_network
+
   loophole:
     image: feedback-app-v1-php-loophole:local
     restart: on-failure
     profiles:
       - tunnel
     entrypoint: ["loophole"]
-    command: ["http", "80", "--hostname", "lab-modsecurity"]
+    command: ["http", "8080", "--hostname", "lab-modsecurity"]
     network_mode: "service:gateway"
     depends_on:
       - gateway
@@ -95,3 +131,6 @@ networks:
 
 volumes:
   db_data:
+  waf_rules:
+  waf_logs:
+  waf_state:
